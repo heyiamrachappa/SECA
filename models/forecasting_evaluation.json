@@ -1,14 +1,14 @@
 {
   "linear_regression": {
-    "mae": 0.366,
-    "rmse": 0.4775,
-    "r2_score": 0.9996,
-    "mape_pct": 1.81
+    "mae": 3.8917,
+    "rmse": 4.9891,
+    "r2_score": 0.9289,
+    "mape_pct": 6.57
   },
   "random_forest": {
-    "mae": 0.3655,
-    "rmse": 0.5224,
-    "r2_score": 0.9995,
-    "mape_pct": 1.84
+    "mae": 3.6306,
+    "rmse": 4.7264,
+    "r2_score": 0.9362,
+    "mape_pct": 6.02
   }
 }
