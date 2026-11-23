@@ -95,39 +95,4 @@ SECA/
 
 ---
 
-## 5. Setup & Execution Instructions
 
-### Step 1: Clone and Enter Directory
-```bash
-cd /home/spidey/PROJECTS/SECA
-```
-
-### Step 2: Virtual Environment Setup
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Step 3: Run Environment Test
-```bash
-pytest tests/test_environment.py -v
-```
-
----
-
-## 6. Implementation Roadmap
-
-- [x] **Phase 1: Environment & Project Setup** (Completed)
-- [x] **Phase 2: Dataset Acquisition & Inspection** (Completed)
-- [ ] **Phase 3: PySpark Ingestion Pipeline** (Next)
-- [ ] **Phase 4: Distributed Preprocessing & Feature Engineering**
-- [ ] **Phase 5: Consumption Analytics & Spark SQL Aggregations**
-- [ ] **Phase 6: Demand Forecasting Models (Linear Regression & Random Forest)**
-- [ ] **Phase 7: Anomaly Detection Engine (Z-Score & Isolation Forest)**
-- [ ] **Phase 8: Streamlit Interactive Dashboard**
-- [ ] **Phase 9: Pipeline Integration & Orchestration**
-- [ ] **Phase 10: Performance Optimization & Testing Suite**
-- [ ] **Phase 11: Final Presentation & Academic Defense Documentation**
-# SECA
