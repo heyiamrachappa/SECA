@@ -5,8 +5,15 @@ Provides an interactive, high-performance interface for Big Data Smart Grid tele
 """
 
 import os
+import sys
 import json
 from pathlib import Path
+
+# Add project root directory to sys.path so imports work from any working directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import streamlit as st
 import pandas as pd
 import numpy as np
