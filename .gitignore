@@ -1,0 +1,35 @@
+# Python virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Large Datasets (keep directories with .gitkeep)
+dataset/raw/*
+!dataset/raw/.gitkeep
+dataset/processed/*
+!dataset/processed/.gitkeep
+
+# Logs
+logs/*.log
+!logs/.gitkeep
+
+# Machine Learning Models (large binaries)
+models/*.pkl
+models/*.joblib
+!models/.gitkeep
+
+# OS & IDE metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Environment variables
+.env
