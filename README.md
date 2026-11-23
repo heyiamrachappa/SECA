@@ -120,8 +120,8 @@ pytest tests/test_environment.py -v
 ## 6. Implementation Roadmap
 
 - [x] **Phase 1: Environment & Project Setup** (Completed)
-- [ ] **Phase 2: Dataset Acquisition & Inspection** (Next)
-- [ ] **Phase 3: PySpark Ingestion Pipeline**
+- [x] **Phase 2: Dataset Acquisition & Inspection** (Completed)
+- [ ] **Phase 3: PySpark Ingestion Pipeline** (Next)
 - [ ] **Phase 4: Distributed Preprocessing & Feature Engineering**
 - [ ] **Phase 5: Consumption Analytics & Spark SQL Aggregations**
 - [ ] **Phase 6: Demand Forecasting Models (Linear Regression & Random Forest)**
