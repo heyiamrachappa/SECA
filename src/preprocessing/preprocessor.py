@@ -26,11 +26,11 @@ class DataPreprocessor:
     generates calendar features, and writes Snappy-compressed Parquet.
     """
 
-    def __init__(self, spark: Optional[SparkSession] = None):
+    def __init__(self, spark: Optional[SparkSession] = None, max_kwh: Optional[float] = None):
         self.spark = spark or get_spark_session(app_name="SECA_Preprocessor")
         self.config = load_config()
         self.prep_cfg = self.config.get("preprocessing", {})
-        self.max_kwh = float(self.prep_cfg.get("max_valid_kwh_half_hour", 25.0))
+        self.max_kwh = float(max_kwh) if max_kwh is not None else float(self.prep_cfg.get("max_valid_kwh_half_hour", 25.0))
         self.min_kwh = float(self.prep_cfg.get("min_valid_kwh_half_hour", 0.0))
         self.null_replacement = float(self.prep_cfg.get("null_replacement", 0.0))
 
@@ -49,19 +49,20 @@ class DataPreprocessor:
 
         # 1. Clean Consumption Column
         # Real London data contains 'Null', ' 0 ', empty spaces, or trailing spaces
-        trimmed_kwh = F.trim(F.col("raw_consumption"))
+        trimmed_kwh = F.trim(F.col("raw_consumption").cast("string"))
         is_null_token = (
             trimmed_kwh.isNull() |
             (trimmed_kwh == "") |
-            (trimmed_kwh == "Null") |
-            (trimmed_kwh == "null")
+            (F.lower(trimmed_kwh) == "null") |
+            (F.lower(trimmed_kwh) == "nan") |
+            (F.lower(trimmed_kwh) == "na")
         )
 
-        # Cast to double, replace 'Null' with configured null_replacement (default 0.0)
+        # Cast to double safely (tolerate malformed strings under Spark 4 ANSI mode)
         df_kwh = df_raw.withColumn(
             "consumption_kwh",
             F.when(is_null_token, F.lit(self.null_replacement))
-            .otherwise(trimmed_kwh.cast(DoubleType()))
+            .otherwise(F.expr("try_cast(trim(cast(raw_consumption as string)) as double)"))
         )
 
         # 2. Filter unphysical / corrupted readings (e.g. negative or > max_kwh)
@@ -71,18 +72,26 @@ class DataPreprocessor:
             F.col("consumption_kwh").isNotNull()
         )
 
-        # 3. Timestamp conversion (handles London Datastore microsecond format)
-        # Primary format: 'yyyy-MM-dd HH:mm:ss.SSSSSSS'
-        # Secondary fallback: 'yyyy-MM-dd HH:mm:ss'
-        trimmed_ts = F.trim(F.col("raw_timestamp"))
-        df_ts = df_valid_kwh.withColumn(
-            "timestamp",
-            F.coalesce(
-                F.to_timestamp(trimmed_ts, "yyyy-MM-dd HH:mm:ss.SSSSSSS"),
-                F.to_timestamp(trimmed_ts, "yyyy-MM-dd HH:mm:ss"),
-                F.to_timestamp(trimmed_ts)
-            )
-        ).filter(F.col("timestamp").isNotNull())
+        # 3. Timestamp conversion (uses try_to_timestamp with F.lit so Spark 4 ANSI mode falls through cleanly)
+        trimmed_ts = F.trim(F.col("raw_timestamp").cast("string"))
+        ts_formats = [
+            "yyyy-MM-dd HH:mm:ss.SSSSSSS",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "dd/MM/yyyy HH:mm:ss",
+            "dd/MM/yyyy HH:mm",
+            "dd-MM-yyyy HH:mm:ss",
+            "MM/dd/yyyy HH:mm:ss",
+            "yyyy/MM/dd HH:mm:ss",
+            "yyyy-MM-dd",
+        ]
+        if hasattr(F, "try_to_timestamp"):
+            ts_exprs = [F.try_to_timestamp(trimmed_ts, F.lit(fmt)) for fmt in ts_formats] + [F.try_to_timestamp(trimmed_ts)]
+        else:
+            ts_exprs = [F.to_timestamp(trimmed_ts, fmt) for fmt in ts_formats] + [F.to_timestamp(trimmed_ts)]
+
+        df_ts = df_valid_kwh.withColumn("timestamp", F.coalesce(*ts_exprs)).filter(F.col("timestamp").isNotNull())
 
         # 4. Deduplication by household_id and timestamp
         df_dedup = df_ts.dropDuplicates(["household_id", "timestamp"])

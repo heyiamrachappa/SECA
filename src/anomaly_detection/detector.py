@@ -42,15 +42,19 @@ class AnomalyDetector:
     def load_telemetry_sample(
         self,
         sample_mode: bool = False,
-        max_rows: int = 100000
+        max_rows: int = 100000,
+        custom_parquet: Optional[Path] = None
     ) -> pd.DataFrame:
         """
         Loads cleaned parquet telemetry for anomaly detection.
         Subsamples if necessary for responsive analysis while preserving temporal ordering.
         """
         root = get_project_root()
-        proc_dir = root / self.config["paths"]["processed_data_dir"]
-        parquet_file = proc_dir / ("sample_cleaned_energy_data.parquet" if sample_mode else "cleaned_energy_data.parquet")
+        if custom_parquet is not None:
+            parquet_file = Path(custom_parquet) if os.path.isabs(str(custom_parquet)) else root / custom_parquet
+        else:
+            proc_dir = root / self.config["paths"]["processed_data_dir"]
+            parquet_file = proc_dir / ("sample_cleaned_energy_data.parquet" if sample_mode else "cleaned_energy_data.parquet")
 
         if not parquet_file.exists():
             raise FileNotFoundError(f"Parquet data not found at {parquet_file}. Run preprocessing first.")
@@ -185,18 +189,19 @@ class AnomalyDetector:
         self,
         df_anom: pd.DataFrame,
         summary: Dict[str, Any],
-        output_dir: str = "dataset/processed/analytics_summary"
+        output_dir: str = "dataset/processed/analytics_summary",
+        save_model: bool = True
     ) -> None:
         """Saves model binary, summary JSON, and top anomalous telemetry records."""
         root = get_project_root()
         models_dir = root / self.config["paths"]["models_dir"]
-        models_dir.mkdir(parents=True, exist_ok=True)
 
-        target_dir = root / output_dir
+        target_dir = root / output_dir if not os.path.isabs(str(output_dir)) else Path(output_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Save Isolation Forest Model
-        if self.iso_model:
+        # 1. Save Isolation Forest Model (only when requested so custom runs don't overwrite defaults)
+        if save_model and self.iso_model:
+            models_dir.mkdir(parents=True, exist_ok=True)
             joblib.dump(self.iso_model, models_dir / "isolation_forest.joblib")
 
         # 2. Save Summary JSON
@@ -233,16 +238,26 @@ class AnomalyDetector:
         logger.info(f"Anomaly artifacts exported to {target_dir} and models/.")
 
 
-def run_anomaly_detection(sample_mode: bool = False, max_rows: int = 100000) -> Dict[str, Any]:
+def run_anomaly_detection(
+    sample_mode: bool = False,
+    max_rows: int = 100000,
+    custom_parquet: Optional[Path] = None,
+    output_dir: Optional[str] = None,
+    save_model: bool = True
+) -> Dict[str, Any]:
     """Helper runner function to execute dual anomaly detection and export artifacts."""
     detector = AnomalyDetector()
-    df = detector.load_telemetry_sample(sample_mode=sample_mode, max_rows=max_rows)
+    df = detector.load_telemetry_sample(
+        sample_mode=sample_mode,
+        max_rows=max_rows,
+        custom_parquet=custom_parquet
+    )
     df_stat = detector.detect_statistical_zscore(df)
     df_anom = detector.detect_isolation_forest(df_stat)
     summary = detector.generate_diagnostic_summary(df_anom)
 
-    summary_dir = "dataset/processed/sample_analytics_summary" if sample_mode else "dataset/processed/analytics_summary"
-    detector.save_artifacts(df_anom, summary, output_dir=summary_dir)
+    summary_dir = output_dir or ("dataset/processed/sample_analytics_summary" if sample_mode else "dataset/processed/analytics_summary")
+    detector.save_artifacts(df_anom, summary, output_dir=summary_dir, save_model=save_model)
 
     print("\n=== [SECA] ANOMALY DETECTION SUMMARY ===")
     print(f"Total Analyzed Records: {summary['total_records_analyzed']:,}")

@@ -41,17 +41,21 @@ class DemandForecaster:
         self.rf_model: Optional[RandomForestRegressor] = None
         self.feature_names: List[str] = []
 
-    def prepare_hourly_series(self, df_hourly_path: Optional[Path] = None, sample_mode: bool = False) -> pd.DataFrame:
+    def prepare_hourly_series(
+        self,
+        df_hourly_path: Optional[Path] = None,
+        sample_mode: bool = False,
+        custom_parquet: Optional[Path] = None
+    ) -> pd.DataFrame:
         """
-        Loads cleaned daily/hourly telemetry or aggregations and builds a continuous hourly load series.
+        Loads cleaned telemetry from Parquet and builds a continuous hourly load series.
         """
         root = get_project_root()
-        summary_dir = root / ("dataset/processed/sample_analytics_summary" if sample_mode else "dataset/processed/analytics_summary")
-        csv_file = df_hourly_path or (summary_dir / "daily_consumption.csv")
-
-        # If summary_dir / daily_consumption.csv exists, load and build hourly series from parquet
-        proc_dir = root / self.config["paths"]["processed_data_dir"]
-        parquet_file = proc_dir / ("sample_cleaned_energy_data.parquet" if sample_mode else "cleaned_energy_data.parquet")
+        if custom_parquet is not None:
+            parquet_file = Path(custom_parquet) if os.path.isabs(str(custom_parquet)) else root / custom_parquet
+        else:
+            proc_dir = root / self.config["paths"]["processed_data_dir"]
+            parquet_file = proc_dir / ("sample_cleaned_energy_data.parquet" if sample_mode else "cleaned_energy_data.parquet")
 
         if not parquet_file.exists():
             raise FileNotFoundError(f"Parquet data not found at {parquet_file}. Run preprocessing first.")
@@ -99,20 +103,23 @@ class DemandForecaster:
         # Target variable: hourly total kWh
         target_series = df["total_kwh"]
 
-        # Lag features
-        for lag in self.lag_hours:
-            if lag < len(df):
-                df[f"lag_{lag}h"] = target_series.shift(lag)
+        # Adapt lags & rolling windows when series is shorter than 168h (e.g., short custom uploads)
+        active_lags = [lag for lag in self.lag_hours if lag < max(2, len(df) // 3)]
+        if not active_lags and len(df) >= 4:
+            active_lags = [1]
+
+        for lag in active_lags:
+            df[f"lag_{lag}h"] = target_series.shift(lag)
 
         # Rolling statistics (strictly on shifted target)
         shifted_target = target_series.shift(1)
-        for w in self.rolling_windows:
-            if w < len(df):
-                df[f"rolling_mean_{w}h"] = shifted_target.rolling(window=w, min_periods=1).mean()
-                df[f"rolling_std_{w}h"] = shifted_target.rolling(window=w, min_periods=1).std().fillna(0.0)
+        active_windows = [w for w in self.rolling_windows if w < len(df)]
+        for w in active_windows:
+            df[f"rolling_mean_{w}h"] = shifted_target.rolling(window=w, min_periods=1).mean()
+            df[f"rolling_std_{w}h"] = shifted_target.rolling(window=w, min_periods=1).std().fillna(0.0)
 
         # Drop NaN rows resulting from max lag
-        max_lag = max(self.lag_hours)
+        max_lag = max(active_lags) if active_lags else 0
         df_clean = df.iloc[max_lag:].reset_index(drop=True)
         logger.info(f"Engineered {df_clean.shape[1]} features across {len(df_clean):,} valid rows.")
         return df_clean
@@ -134,7 +141,7 @@ class DemandForecaster:
         timestamps = df_feat["timestamp"]
 
         n_total = len(df_feat)
-        n_test = max(self.horizon_hours, int(n_total * self.test_ratio))
+        n_test = min(max(self.horizon_hours, int(n_total * self.test_ratio)), max(1, n_total // 3))
         n_train = n_total - n_test
 
         X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
@@ -209,24 +216,26 @@ class DemandForecaster:
         X_test: pd.DataFrame,
         y_test: pd.Series,
         ts_test: pd.Series,
-        output_dir: str = "dataset/processed/analytics_summary"
+        output_dir: str = "dataset/processed/analytics_summary",
+        save_models: bool = True
     ) -> None:
         """Saves trained models, evaluation metrics, and comparison datasets."""
         root = get_project_root()
         models_dir = root / self.config["paths"]["models_dir"]
-        models_dir.mkdir(parents=True, exist_ok=True)
 
-        target_summary_dir = root / output_dir
+        target_summary_dir = root / output_dir if not os.path.isabs(str(output_dir)) else Path(output_dir)
         target_summary_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Save Serialized Models
-        joblib.dump(self.lr_model, models_dir / "linear_regression.joblib")
-        joblib.dump(self.rf_model, models_dir / "random_forest.joblib")
-        joblib.dump(self.feature_names, models_dir / "feature_names.joblib")
+        # 1. Save Serialized Models (only when requested so custom runs don't overwrite defaults)
+        if save_models:
+            models_dir.mkdir(parents=True, exist_ok=True)
+            joblib.dump(self.lr_model, models_dir / "linear_regression.joblib")
+            joblib.dump(self.rf_model, models_dir / "random_forest.joblib")
+            joblib.dump(self.feature_names, models_dir / "feature_names.joblib")
+            with open(models_dir / "forecasting_evaluation.json", "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2)
 
         # 2. Save Metrics
-        with open(models_dir / "forecasting_evaluation.json", "w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2)
         with open(target_summary_dir / "forecasting_evaluation.json", "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
@@ -294,18 +303,27 @@ class DemandForecaster:
         logger.info("Saved all forecasting artifacts, model binaries, and comparison CSVs.")
 
 
-def run_forecasting(sample_mode: bool = False) -> Dict[str, Any]:
+def run_forecasting(
+    sample_mode: bool = False,
+    custom_parquet: Optional[Path] = None,
+    output_dir: Optional[str] = None,
+    save_models: bool = True
+) -> Dict[str, Any]:
     """Helper runner function to train, evaluate, and save models."""
     forecaster = DemandForecaster()
-    df_ts = forecaster.prepare_hourly_series(sample_mode=sample_mode)
+    df_ts = forecaster.prepare_hourly_series(sample_mode=sample_mode, custom_parquet=custom_parquet)
+    if len(df_ts) < 12:
+        raise ValueError(
+            f"Dataset contains only {len(df_ts)} hourly steps; at least 12 hourly intervals are required for demand forecasting."
+        )
     df_feat = forecaster.engineer_features(df_ts)
     X_train, X_test, y_train, y_test, ts_train, ts_test = forecaster.train_test_split_chronological(df_feat)
 
     forecaster.train_models(X_train, y_train)
     metrics = forecaster.evaluate_models(X_test, y_test)
 
-    summary_dir = "dataset/processed/sample_analytics_summary" if sample_mode else "dataset/processed/analytics_summary"
-    forecaster.save_artifacts(metrics, X_test, y_test, ts_test, output_dir=summary_dir)
+    summary_dir = output_dir or ("dataset/processed/sample_analytics_summary" if sample_mode else "dataset/processed/analytics_summary")
+    forecaster.save_artifacts(metrics, X_test, y_test, ts_test, output_dir=summary_dir, save_models=save_models)
 
     print("\n=== [SECA] DEMAND FORECASTING EVALUATION ===")
     print("Linear Regression (Baseline):")
